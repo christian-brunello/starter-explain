@@ -1,0 +1,302 @@
+\input texinfo   @c -*-texinfo-*-
+@setfilename starter-explain.info
+@settitle Starter Explain Documentation
+
+@paragraphindent 0
+
+@copying
+Copyright @copyright{} 2026 Christian Brunello.
+
+Permission is granted to copy, distribute and/or modify this document
+under the terms of the GNU Free Documentation License, Version 1.3
+or any later version published by the Free Software Foundation;
+with no Invariant Sections, no Front-Cover Texts, and no Back-Cover Texts.
+A copy of the license is included in the section entitled ``GNU Free
+Documentation License''.
+@end copying
+
+@titlepage
+@title STARTER Explain
+@subtitle Spoken explanations for STARTER I/O changes
+@author Christian Brunello
+@end titlepage
+
+@insertcopying
+
+@ifnottex
+@node Top
+@top STARTER Explain
+@insertcopying
+@end ifnottex
+
+@contents
+
+@menu
+* Introduction::
+* Building and Running::
+* Configuration Reference::
+* Prompt Contract::
+* External Services::
+* Demo Walkthrough::
+* GNU Free Documentation License::
+* GNU General Public License::
+@end menu
+
+@node Introduction
+@chapter Introduction
+
+@command{starter-explain} is a long-running daemon that attaches to
+@command{starter-core}'s remote debug server (GDBus over TCP).  It tracks
+I/O state grouped into @dfn{contexts} defined in an XML configuration
+(@file{.stex.xml}), and on relevant changes it:
+
+@enumerate
+@item
+Builds a structured prompt for an external large language model (LLM).
+@item
+Converts the model reply to speech via an external text-to-speech (TTS)
+service.
+@item
+Plays the resulting audio on the host (for example with @command{paplay}).
+@end enumerate
+
+The daemon does not embed an LLM or a RAG index.  Those are separate
+processes (Ollama, a thin RAG HTTP wrapper, Wyoming Piper, and so on).
+@command{starter-explain} only needs HTTP (or Wyoming TCP) endpoints and a
+valid stex file.
+
+I/O human-readable text in prompts comes from the @strong{description}
+field published by the debug interface, not from duplicated labels in the
+stex file.  Context @code{name} / @code{description} attributes describe
+the group, not each individual I/O.
+
+@node Building and Running
+@chapter Building and Running
+
+@section Prerequisites
+
+@itemize
+@item GLib / GObject / GIO (@code{libglib2.0-dev})
+@item libxml2 (@code{libxml2-dev})
+@item json-glib (@code{libjson-glib-dev})
+@item libsoup 3.x (or 2.4 @math{\ge} 2.58)
+@item Autotools (@code{autoconf}, @code{automake}, @code{libtool})
+@item Optional: @code{texinfo} to build this manual
+@end itemize
+
+@section Build
+
+@example
+$ ./autogen.sh
+$ ./configure
+$ make
+$ sudo make install
+@end example
+
+@section Command line
+
+@example
+$ starter-explain --config=examples/demo.stex.xml
+$ starter-explain --config=FILE --core=HOST:PORT --dry-run
+@end example
+
+@table @code
+@item --config=FILE
+Path to the stex XML configuration (required).
+@item --core=HOST:PORT
+Override the @code{<core>} host and port from the file.
+@item --dry-run
+Build prompts and call the LLM/TTS path without playing audio
+(or skip side effects as implemented).
+@end table
+
+Enable verbose logs with:
+
+@example
+$ G_MESSAGES_DEBUG=all starter-explain --config=FILE
+@end example
+
+@node Configuration Reference
+@chapter Configuration Reference
+
+The root element is @code{<stex version="1">}.  Comments in
+@file{examples/demo.stex.xml} mirror this chapter.
+
+@section Core
+
+@example
+<core host="127.0.0.1" port="17373"/>
+@end example
+
+Host and TCP port of starter-core's remote debug server.
+
+@section LLM
+
+@example
+<llm url="http://127.0.0.1:11434/api/generate"
+     model="qwen2.5:3b"
+     timeout-ms="30000"
+     max-queue="4"
+     num-predict="32"
+     keep-alive="300">
+  <system>...</system>
+  <prompt>
+    <user-template>...</user-template>
+  </prompt>
+</llm>
+@end example
+
+@table @code
+@item url
+HTTP endpoint.  The daemon POSTs an Ollama-compatible JSON body
+(@code{model}, @code{system}, @code{prompt}, @code{stream:false},
+@code{options}, optional @code{keep_alive}).
+@item model
+Model name forwarded to the endpoint.
+@item num-predict
+Maximum tokens to generate (voice replies should stay short).
+@item keep-alive
+Seconds to keep the model loaded (@code{-1} = server default / forever).
+@item system
+System message text.
+@item user-template
+User prompt template.  Placeholders include @code{@{@{type@}@}},
+@code{@{@{event@}@}}, @code{@{@{rule@}@}}, @code{@{@{context@}@}},
+@code{@{@{state@}@}}, plus legacy aliases documented in the source.
+@end table
+
+Optional @code{<header name="..." value="..."/>} children may be added
+under @code{<llm>} for HTTP authentication.
+
+@section TTS and audio
+
+Wyoming (recommended for Piper):
+
+@example
+<tts method="wyoming"
+     url="tcp://127.0.0.1:5005"
+     timeout-ms="30000"
+     max-queue="4"
+     response="audio/wav"/>
+<audio player="paplay @{@{file@}@}"/>
+@end example
+
+@code{method="wyoming"} (or a @code{tcp://} / @code{wyoming://} URL) uses
+the Wyoming protocol.  PCM is wrapped as a temporary WAV file; then the
+@code{player} command is run with @samp{@{@{file@}@}} replaced.
+
+HTTP TTS uses @code{method="POST"} (or @code{GET}) with
+@code{body-template} / @code{content-type} as needed.
+
+@section Ignore, contexts, deadband, policy
+
+@table @asis
+@item @code{<ignore>}
+Patterns or names that never trigger an explanation.
+@item @code{<contexts>} / @code{<context>}
+Named groups of @code{<io name="..."/>} or @code{pattern="..."}.
+An I/O may belong to several contexts.
+@item @code{<deadband>}
+Per-I/O or pattern @code{min-delta} overrides.
+@item @code{<policy>}
+@code{debounce-ms}, @code{coalesce}, @code{history-length}, default
+@code{min-delta}.
+@end table
+
+@node Prompt Contract
+@chapter Prompt Contract
+
+The default user template emits:
+
+@example
+TYPE: event|action
+EVENT: ...
+RULE: ... | none
+CONTEXT: ...
+STATE:
+...
+@end example
+
+@table @code
+@item TYPE
+@code{action} when an engine RULE/TRIGGER describe is available for the
+change; otherwise @code{event} (including output changes without a cached
+rule, which still go to the LLM with @code{RULE: none}).
+@item EVENT
+Changed I/O id, direction, old/new values, unit, and debug description.
+@item RULE
+Text from @code{RuleTriggered} / @code{TriggerTriggered} on the destination,
+or @code{none}.
+@item CONTEXT
+Merged context names and descriptions for the changed I/O.
+@item STATE
+Compact snapshot: the changed I/O (with short history), and for actions
+any I/O identifiers referenced by the rule text.
+@end table
+
+Tune the @code{<system>} message so the model follows event vs action
+style (third person vs ``I @dots{} because @dots{}'').
+
+@node External Services
+@chapter External Services
+
+@section Ollama
+
+Point @code{<llm url>} at @code{http://HOST:11434/api/generate}, or at a
+wrapper that accepts the same JSON and returns
+@code{@{ "response": "..." @}}.
+
+@section Optional RAG
+
+A separate HTTP service may retrieve short curated documents before
+calling Ollama.  That service is @strong{not} part of the
+@command{starter-explain} binary.  Keep manuals and large dumps out of the
+voice corpus if they pollute short spoken replies.
+
+@section Wyoming Piper
+
+Run a Wyoming TTS server (for example @code{rhasspy/wyoming-piper}) and
+set @code{<tts method="wyoming" url="tcp://HOST:PORT"/>}.
+
+@node Demo Walkthrough
+@chapter Demo Walkthrough
+
+@file{examples/demo.stex.xml} is a localhost configuration with English
+comments on every block.  To try it:
+
+@enumerate
+@item
+Start starter-core with remote debug on @code{127.0.0.1:17373}
+(or pass @code{--core=} to match your setup).
+@item
+Start an LLM endpoint (Ollama or compatible) and optionally Wyoming TTS.
+@item
+Adjust @code{model}, URLs, and context I/O names to match your rules and
+adapters.
+@item
+Run:
+
+@example
+$ starter-explain --config=examples/demo.stex.xml --dry-run
+@end example
+
+@item
+Change an I/O that belongs to a context and watch the log for the built
+prompt and LLM reply.
+@end enumerate
+
+Map your real devices by listing their debug I/O names under the right
+@code{<context>}, set ignore patterns for noisy meters, and tune
+deadbands so humidity or temperature chatter does not spam the voice path.
+
+@node GNU Free Documentation License
+@appendix GNU Free Documentation License
+
+@include fdl.texi
+
+@node GNU General Public License
+@appendix GNU General Public License
+
+@include gpl.texi
+
+@bye

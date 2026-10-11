@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  starter-explain — demo configuration (localhost)
+
+  This file is a complete, commented example for learning the stex schema.
+  Point <core>, <llm>, and <tts> at your own hosts before using it for real.
+
+  Flow: starter-core debug (GDBus/TCP) → group I/O into contexts → on a
+  relevant change build a prompt → HTTP LLM (Ollama-compatible) → TTS → play.
+-->
+<stex version="1">
+
+  <!--
+    Where starter-core exposes the remote debug server.
+    Override at runtime with CLI flag core=HOST:PORT
+  -->
+  <core host="127.0.0.1" port="17373"/>
+
+  <!--
+    LLM endpoint. The daemon POSTs an Ollama-style JSON body:
+      { model, system, prompt, stream:false, options:{num_predict,...}, keep_alive }
+    url may be plain Ollama (/api/generate) or a thin RAG wrapper that accepts
+    the same body and returns { "response": "..." }.
+
+    <system> is sent as the system message. Keep it short and consistent with
+    the TYPE event|action contract below.
+    <prompt><user-template> uses placeholders filled by the daemon
+    (see the Texinfo manual): {{type}} {{event}} {{rule}} {{context}} {{state}}
+  -->
+  <llm url="http://127.0.0.1:11434/api/generate"
+       model="qwen2.5:3b"
+       timeout-ms="30000"
+       max-queue="4"
+       num-predict="32"
+       keep-alive="300">
+    <system>
+You are the house voice assistant. Reply with one short English sentence about THIS message only.
+Use only EVENT, RULE, CONTEXT and STATE. Do not invent devices or values.
+TYPE event: third person; describe only the change in EVENT; no "I"; no cause; max ~16 words.
+Include the place from the EVENT description when present (e.g. kitchen, outdoor).
+TYPE action: "I ... because ..." using RULE and numbers in STATE; only when RULE is not none.
+    </system>
+    <prompt>
+      <user-template>
+TYPE: {{type}}
+EVENT: {{event}}
+RULE: {{rule}}
+CONTEXT: {{context}}
+STATE:
+{{state}}
+      </user-template>
+    </prompt>
+  </llm>
+
+  <!--
+    TTS: method="wyoming" (or url starting with tcp:// / wyoming://) talks to a
+    Wyoming protocol server (e.g. rhasspy/wyoming-piper). PCM is wrapped as WAV.
+    For HTTP TTS use method="POST" with body-template / content-type instead.
+  -->
+  <tts method="wyoming"
+       url="tcp://127.0.0.1:5005"
+       timeout-ms="30000"
+       max-queue="4"
+       response="audio/wav"/>
+
+  <!-- Shell used to play the WAV. {{file}} is replaced with the temp path. -->
+  <audio player="paplay {{file}}"/>
+
+  <!--
+    I/O matching these patterns are never explained (and not kept in context maps).
+    Use for high-rate meters, clocks, etc.
+  -->
+  <ignore>
+    <io pattern="^TIME:"/>
+    <io pattern=":meter[01]power$"/>
+    <io pattern=":meter[01]reactive$"/>
+    <io pattern=":meter[01]voltage$"/>
+  </ignore>
+
+  <contexts>
+
+    <!--
+      A context is a named group of I/O. When a listed I/O changes (and is not
+      ignored / below deadband), that context's name+description go into CONTEXT.
+      An I/O may belong to several contexts (N:M); they are merged in the prompt.
+      <io> entries only need name= or pattern= — human text comes from the
+      debug interface description of each I/O, not from stex.
+    -->
+    <context id="room"
+             name="Demo room"
+             description="Indoor thermostat and call-for-heat relay for the demo room">
+      <io name="DemoThermostat:temperature"/>
+      <io name="DemoThermostat:humidity"/>
+      <io name="DemoThermostat:relay"/>
+      <io name="PARAM:TargetTemp"/>
+      <io name="PARAM:BoilerThr"/>
+    </context>
+
+    <context id="boiler"
+             name="Demo boiler"
+             description="Hybrid boiler plant mode and circulation pump">
+      <io name="DemoBoiler:mode"/>
+      <io name="DemoBoiler:pump"/>
+      <io name="PARAM:BoilerThr"/>
+      <io name="METEO:currentTemperature"/>
+    </context>
+
+    <!-- Shared weather I/O: membership in both outdoor + weather → two contexts -->
+    <context id="outdoor"
+             name="Outdoor"
+             description="Outdoor lights and weather-linked covers">
+      <io name="DemoLight:switch"/>
+      <io name="METEO:rain"/>
+      <io name="METEO:isDay"/>
+      <io name="SUN:azimuth"/>
+      <io name="SUN:elevation"/>
+    </context>
+
+    <context id="weather"
+             name="Weather"
+             description="Outdoor weather conditions relevant to the house">
+      <io name="METEO:rain"/>
+      <io name="METEO:isDay"/>
+      <io name="METEO:currentTemperature"/>
+      <io name="METEO:currentHumidity"/>
+    </context>
+
+  </contexts>
+
+  <!--
+    Per-I/O (or pattern) minimum absolute change before an explain is queued.
+    If omitted, <policy min-delta=...> applies.
+  -->
+  <deadband>
+    <io name="DemoThermostat:temperature" min-delta="0.2"/>
+    <io name="DemoThermostat:humidity" min-delta="1.0"/>
+    <io name="DemoBoiler:mode" min-delta="0.05"/>
+    <io name="METEO:rain" min-delta="0.1"/>
+    <io name="METEO:currentTemperature" min-delta="0.5"/>
+    <io name="SUN:azimuth" min-delta="15"/>
+    <io name="SUN:elevation" min-delta="5"/>
+    <io pattern="^PARAM:" min-delta="0.01"/>
+  </deadband>
+
+  <!--
+    debounce-ms: coalesce rapid changes with the same context fingerprint.
+    coalesce: merge pending explains for the same fingerprint.
+    history-length: samples kept per I/O for the STATE history line.
+    min-delta: default deadband when no per-I/O override matches.
+  -->
+  <policy debounce-ms="800" coalesce="true"
+          history-length="8"
+          min-delta="0.05"/>
+</stex>

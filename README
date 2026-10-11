@@ -1,0 +1,57 @@
+STARTER Explain
+===============
+
+1. OVERVIEW
+===========
+
+starter-explain is a long-running daemon that attaches to starter-core's
+remote debug server (GDBus over TCP), tracks I/O state grouped into
+contexts defined in an XML configuration, and on relevant I/O changes
+builds a prompt for an external LLM, converts the reply to speech via an
+external TTS service, and plays the audio.
+
+The LLM, optional RAG index, and TTS server are external.  This repository
+ships the daemon, a commented demo configuration, and the Texinfo manual.
+
+2. PREREQUISITES
+================
+
+* GLib / GObject / GIO (libglib2.0-dev)
+* libxml2 (libxml2-dev)
+* json-glib (libjson-glib-dev)
+* libsoup 3.x or 2.4 >= 2.58
+* Autotools (autoconf, automake, libtool)
+* Optional: texinfo (to build the manual)
+
+3. BUILDING
+===========
+
+    $ ./autogen.sh
+    $ ./configure
+    $ make
+    $ sudo make install
+
+Documentation (Info):
+
+    $ make -C doc
+
+4. USAGE
+========
+
+See the commented example and the manual:
+
+    examples/demo.stex.xml
+    info starter-explain   # after make install / make -C doc
+
+    $ starter-explain --config=examples/demo.stex.xml
+    $ starter-explain --config=FILE --core=HOST:PORT --dry-run
+
+Enable debug logs with:
+
+    $ G_MESSAGES_DEBUG=all starter-explain --config=FILE
+
+5. LICENSE
+==========
+
+GNU General Public License version 3 or later.
+Documentation under the GNU Free Documentation License (see doc/).
