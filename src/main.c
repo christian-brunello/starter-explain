@@ -115,7 +115,8 @@ main (int argc, char **argv)
     { "dry-run", 'n', 0, G_OPTION_ARG_NONE, &opt.dry_run,
       "Log LLM replies without TTS/audio", NULL },
     { "log-text", 'l', 0, G_OPTION_ARG_FILENAME, &opt.log_text,
-      "Append LLM text and trigger reason to FILE", "FILE" },
+      "Append each explain iteration (io, request to LLM, response) to FILE",
+      "FILE" },
     { "version", 'V', 0, G_OPTION_ARG_NONE, &opt.version,
       "Show version and exit", NULL },
     { NULL }

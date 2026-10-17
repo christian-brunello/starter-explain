@@ -54,7 +54,9 @@ struct _STExplainService
 typedef struct
 {
   STExplainService *svc;
-  gchar *reason;		/* trigger / contexts (motivazione) */
+  gchar *io;			/* changed I/O that triggered explain */
+  gchar *system;		/* system string sent to LLM / app.py */
+  gchar *prompt;		/* user prompt (stex template) sent to app.py */
 } LlmAskCb;
 
 static void
@@ -167,7 +169,9 @@ llm_ask_cb_free (gpointer p)
   LlmAskCb *cb = p;
   if (!cb)
     return;
-  g_free (cb->reason);
+  g_free (cb->io);
+  g_free (cb->system);
+  g_free (cb->prompt);
   g_free (cb);
 }
 
@@ -199,8 +203,9 @@ build_reason (PendingExplain * pe)
 }
 
 static void
-append_text_log (STExplainService * svc, const gchar * reason,
-		 const gchar * text)
+append_text_log (STExplainService * svc, const gchar * io,
+		 const gchar * system, const gchar * prompt,
+		 const gchar * response)
 {
   g_autoptr (GDateTime) now = NULL;
   g_autofree gchar *ts = NULL;
@@ -219,10 +224,15 @@ append_text_log (STExplainService * svc, const gchar * reason,
       return;
     }
 
+  /* One iteration: timestamp, trigger I/O, request to app.py, response.
+   * Entries separated by a blank line (double newline). */
   fprintf (fp, "%s\n", ts ? ts : "?");
-  fprintf (fp, "motivo: %s\n", reason ? reason : "?");
-  fprintf (fp, "testo: %s\n", text ? text : "");
-  fprintf (fp, "---\n");
+  fprintf (fp, "io: %s\n", io ? io : "?");
+  fprintf (fp, "request:\n");
+  fprintf (fp, "system:\n%s\n", system && *system ? system : "(none)");
+  fprintf (fp, "prompt:\n%s\n", prompt && *prompt ? prompt : "(empty)");
+  fprintf (fp, "response: %s\n", response ? response : "");
+  fprintf (fp, "\n");
   fflush (fp);
   fclose (fp);
 }
@@ -266,12 +276,16 @@ on_llm_done (gboolean ok, const gchar * text, const gchar * error_message,
 
   if (!ok || text == NULL || *text == '\0')
     {
+      g_autofree gchar *err =
+	g_strdup_printf ("(LLM failed: %s)",
+			 error_message ? error_message : "?");
       LOGW ("LLM failed: %s", error_message ? error_message : "?");
+      append_text_log (svc, cb->io, cb->system, cb->prompt, err);
       return;
     }
 
   LOGI ("explanation: %s", text);
-  append_text_log (svc, cb->reason, text);
+  append_text_log (svc, cb->io, cb->system, cb->prompt, text);
 
   if (svc->dry_run)
     {
@@ -305,12 +319,19 @@ run_explain (STExplainService * svc, PendingExplain * pe)
 
   cb = g_new0 (LlmAskCb, 1);
   cb->svc = svc;
-  cb->reason = build_reason (pe);
+  cb->io = build_reason (pe);
+  cb->system = g_strdup (svc->cfg->llm_system ? svc->cfg->llm_system : "");
+  cb->prompt = g_strdup (prompt ? prompt : "");
 
   if (!st_explain_llm_ask
       (svc->llm, svc->cfg->llm_system, prompt, pe->coalesce_key, on_llm_done,
        cb, llm_ask_cb_free))
-    LOGW ("LLM queue full, dropped explain for %s", pe->changed_name);
+    {
+      append_text_log (svc, cb->io, cb->system, cb->prompt,
+		       "(dropped: LLM queue full)");
+      llm_ask_cb_free (cb);
+      LOGW ("LLM queue full, dropped explain for %s", pe->changed_name);
+    }
 }
 
 typedef struct
