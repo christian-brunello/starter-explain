@@ -230,8 +230,10 @@ or @code{none}.
 @item CONTEXT
 Merged context names and descriptions for the changed I/O.
 @item STATE
-Compact snapshot: the changed I/O (with short history), and for actions
-any I/O identifiers referenced by the rule text.
+Snapshot of every seen I/O in the changed I/O's context(s) (union when
+membership is N:M), each with current value and short history when more
+than one sample is available.  For actions, any extra I/O identifiers
+referenced by the rule text are included as well.
 @end table
 
 Tune the @code{<system>} message so the model follows event vs action

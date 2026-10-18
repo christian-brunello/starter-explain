@@ -228,7 +228,7 @@ collect_ids_from_rule (const gchar * rule, GHashTable * set)
 
 static gchar *
 format_io_line (STExplainState * state, const gchar * name,
-		const gchar * changed_name, gboolean with_history)
+		gboolean with_history)
 {
   STExplainIo *io;
   STExplainSample cur;
@@ -251,8 +251,7 @@ format_io_line (STExplainState * state, const gchar * name,
     g_string_append_printf (s, " - %s", io->description);
   g_string_append_c (s, '\n');
 
-  if (with_history && g_strcmp0 (name, changed_name) == 0 &&
-      io->hist_count > 1)
+  if (with_history && io->hist_count > 1)
     {
       guint hist_len = io->history->len;
       g_string_append (s, "  history:");
@@ -270,6 +269,22 @@ format_io_line (STExplainState * state, const gchar * name,
   return g_string_free (s, FALSE);
 }
 
+static void
+append_state_line (GString * s, STExplainState * state, const gchar * name,
+		   GHashTable * seen)
+{
+  g_autofree gchar *line = NULL;
+
+  if (name == NULL || name[0] == '\0')
+    return;
+  if (g_hash_table_contains (seen, name))
+    return;
+  g_hash_table_add (seen, g_strdup (name));
+  line = format_io_line (state, name, TRUE);
+  if (line)
+    g_string_append (s, line);
+}
+
 static gchar *
 build_compact_state (STExplainState * state, GPtrArray * contexts,
 		     const gchar * changed_name,
@@ -277,35 +292,36 @@ build_compact_state (STExplainState * state, GPtrArray * contexts,
 		     const gchar * engine_describe)
 {
   GString *s = g_string_new ("");
-  g_autoptr (GHashTable) want = NULL;
+  g_autoptr (GHashTable) seen = NULL;
+  g_autoptr (GHashTable) rule_ids = NULL;
+  g_autoptr (GPtrArray) merged = NULL;
   GHashTableIter iter;
   gpointer key;
-  g_autofree gchar *line = NULL;
+  guint i;
 
-  want = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
-  if (changed_name)
-    g_hash_table_add (want, g_strdup (changed_name));
+  seen = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
 
-  if (changed_kind == ST_EXPLAIN_IO_OUTPUT && engine_describe &&
-      *engine_describe)
-    collect_ids_from_rule (engine_describe, want);
+  /* Changed I/O first, then other members of its context(s) (stable order). */
+  append_state_line (s, state, changed_name, seen);
 
-  /* If action and rule parse found nothing beyond changed, keep only changed. */
-  g_hash_table_iter_init (&iter, want);
-  while (g_hash_table_iter_next (&iter, &key, NULL))
+  if (contexts && contexts->len > 0)
     {
-      const gchar *name = key;
-      line =
-	format_io_line (state, name, changed_name,
-			g_strcmp0 (name, changed_name) == 0);
-      if (line)
-	{
-	  g_string_append (s, line);
-	  g_clear_pointer (&line, g_free);
-	}
+      merged = st_explain_state_merge_io_names (state, contexts);
+      for (i = 0; i < merged->len; i++)
+	append_state_line (s, state, merged->pdata[i], seen);
     }
 
-  (void) contexts;
+  /* Action: also include any Service:io ids referenced by RULE text. */
+  if (changed_kind == ST_EXPLAIN_IO_OUTPUT && engine_describe &&
+      *engine_describe)
+    {
+      rule_ids = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+      collect_ids_from_rule (engine_describe, rule_ids);
+      g_hash_table_iter_init (&iter, rule_ids);
+      while (g_hash_table_iter_next (&iter, &key, NULL))
+	append_state_line (s, state, key, seen);
+    }
+
   return g_string_free (s, FALSE);
 }
 

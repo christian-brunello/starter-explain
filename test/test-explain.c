@@ -187,6 +187,19 @@ test_prompt_and_units (void)
   st_explain_state_upsert (state, "DemoThermostat:temperature",
 			   ST_EXPLAIN_IO_INPUT, "Demo room thermostat temperature",
 			   1, 0, 50, 0.1, 50.0, 0, &explain, &oldv, &oldf);
+  /* Sibling context members (seen samples) appear in STATE with history. */
+  st_explain_state_upsert (state, "DemoThermostat:relay",
+			   ST_EXPLAIN_IO_OUTPUT, "relay", 4, 0, 1, 1, 0.0, 0,
+			   &explain, &oldv, &oldf);
+  st_explain_state_upsert (state, "DemoThermostat:relay",
+			   ST_EXPLAIN_IO_OUTPUT, "relay", 4, 0, 1, 1, 1.0, 0,
+			   &explain, &oldv, &oldf);
+  st_explain_state_upsert (state, "PARAM:TargetTemp",
+			   ST_EXPLAIN_IO_INPUT, "target", 1, 0, 30, 0.1, 20.0,
+			   0, &explain, &oldv, &oldf);
+  st_explain_state_upsert (state, "PARAM:TargetTemp",
+			   ST_EXPLAIN_IO_INPUT, "target", 1, 0, 30, 0.1, 21.0,
+			   0, &explain, &oldv, &oldf);
   st_explain_state_rebuild_membership (state);
   ctx = st_explain_state_contexts_of (state, "DemoThermostat:temperature");
   prompt =
@@ -203,16 +216,15 @@ test_prompt_and_units (void)
   g_assert_true (strstr (prompt, "Demo room") != NULL);
   /* description comes from debug I/O */
   g_assert_true (strstr (prompt, "Demo room thermostat temperature") != NULL);
-  /* Compact event STATE: no unrelated PARAM dump */
+  /* Context STATE: siblings with samples + history lines */
+  g_assert_true (strstr (prompt, "DemoThermostat:relay") != NULL);
+  g_assert_true (strstr (prompt, "PARAM:TargetTemp") != NULL);
+  g_assert_true (strstr (prompt, "history:") != NULL);
+  /* Not upserted → absent even if listed in stex context */
   g_assert_true (strstr (prompt, "PARAM:BoilerThr") == NULL);
+  /* Unrelated context (boiler-only I/O never seen) */
+  g_assert_true (strstr (prompt, "DemoBoiler:mode") == NULL);
 
-  st_explain_state_upsert (state, "DemoThermostat:relay",
-			   ST_EXPLAIN_IO_OUTPUT, "relay", 4, 0, 1, 1, 0.0, 0,
-			   &explain, &oldv, &oldf);
-  st_explain_state_upsert (state, "DemoThermostat:relay",
-			   ST_EXPLAIN_IO_OUTPUT, "relay", 4, 0, 1, 1, 1.0, 0,
-			   &explain, &oldv, &oldf);
-  st_explain_state_rebuild_membership (state);
   g_ptr_array_free (ctx, TRUE);
   ctx = st_explain_state_contexts_of (state, "DemoThermostat:relay");
   prompt_action =
@@ -225,6 +237,7 @@ test_prompt_and_units (void)
   g_assert_true (strstr (prompt_action, "SET 1.000000 WHEN") != NULL);
   g_assert_true (strstr (prompt_action, "STATE:") != NULL);
   g_assert_true (strstr (prompt_action, "DemoThermostat:temperature") != NULL);
+  g_assert_true (strstr (prompt_action, "PARAM:TargetTemp") != NULL);
 
   g_ptr_array_free (ctx, TRUE);
   st_explain_state_free (state);
